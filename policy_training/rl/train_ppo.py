@@ -40,6 +40,7 @@ PPO_PRESETS = {
         "num_minibatches": 32,
         "n_epochs": 8,
         "learning_rate": 3e-4,
+        "optimizer_eps": 1e-5,
         "gamma": 0.8,
         "gae_lambda": 0.9,
         "clip_range": 0.2,
@@ -55,6 +56,7 @@ PPO_PRESETS = {
         "batch_size": 256,
         "n_epochs": 2,
         "learning_rate": 1e-5,
+        "optimizer_eps": 1e-8,
         "gamma": 0.99,
         "gae_lambda": 0.95,
         "clip_range": 0.1,
@@ -90,6 +92,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--num-minibatches", type=int)
     p.add_argument("--n-epochs", type=int, default=None)
     p.add_argument("--learning-rate", type=float, default=None)
+    p.add_argument("--backbone-learning-rate", type=float)
+    p.add_argument("--actor-head-learning-rate", type=float)
+    p.add_argument("--critic-learning-rate", type=float)
+    p.add_argument("--optimizer-eps", type=float, default=None)
     p.add_argument("--gamma", type=float, default=None)
     p.add_argument("--gae-lambda", type=float, default=None)
     p.add_argument("--clip-range", type=float, default=None)
@@ -160,6 +166,16 @@ def _validate(args: argparse.Namespace) -> None:
         raise ValueError("n-steps * num-envs must be divisible by batch-size")
     if args.total_timesteps < rollout_size:
         raise ValueError("total-timesteps must cover at least one PPO rollout")
+    if args.learning_rate <= 0 or args.optimizer_eps <= 0:
+        raise ValueError("learning-rate and optimizer-eps must be positive")
+    for name in (
+        "backbone_learning_rate",
+        "actor_head_learning_rate",
+        "critic_learning_rate",
+    ):
+        value = getattr(args, name)
+        if value is not None and value < 0:
+            raise ValueError(f"{name.replace('_', '-')} cannot be negative")
 
 
 def _run_metadata() -> dict:
@@ -192,6 +208,49 @@ def _run_metadata() -> dict:
         "cuda_version": torch.version.cuda,
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
     }
+
+
+def _make_optimizer(
+    policy: ResNetGaussianPolicy,
+    value: torch.nn.Module,
+    *,
+    learning_rate: float,
+    backbone_learning_rate: float | None,
+    actor_head_learning_rate: float | None,
+    critic_learning_rate: float | None,
+    eps: float,
+) -> torch.optim.Adam:
+    backbone_parameters = list(policy.backbone.parameters())
+    backbone_ids = {id(parameter) for parameter in backbone_parameters}
+    actor_head_parameters = [
+        parameter for parameter in policy.parameters() if id(parameter) not in backbone_ids
+    ]
+    parameter_groups = [
+        {
+            "params": backbone_parameters,
+            "lr": (
+                learning_rate
+                if backbone_learning_rate is None
+                else backbone_learning_rate
+            ),
+            "name": "actor_backbone",
+        },
+        {
+            "params": actor_head_parameters,
+            "lr": (
+                learning_rate
+                if actor_head_learning_rate is None
+                else actor_head_learning_rate
+            ),
+            "name": "actor_head",
+        },
+        {
+            "params": list(value.parameters()),
+            "lr": learning_rate if critic_learning_rate is None else critic_learning_rate,
+            "name": "critic",
+        },
+    ]
+    return torch.optim.Adam(parameter_groups, eps=eps)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -339,6 +398,16 @@ def main(argv: list[str] | None = None) -> None:
         device=device,
         cfg=cfg,
     )
+    agent.optimizer = _make_optimizer(
+        policy,
+        value,
+        learning_rate=args.learning_rate,
+        backbone_learning_rate=args.backbone_learning_rate,
+        actor_head_learning_rate=args.actor_head_learning_rate,
+        critic_learning_rate=args.critic_learning_rate,
+        eps=args.optimizer_eps,
+    )
+    agent.checkpoint_modules["optimizer"] = agent.optimizer
 
     best_success = -1.0
     next_eval = args.eval_every

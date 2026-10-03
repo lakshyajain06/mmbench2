@@ -19,7 +19,12 @@ from policy_training.rl.ppo import (
     load_portable_policy,
     save_portable_checkpoint,
 )
-from policy_training.rl.train_ppo import _apply_preset, _validate, parser
+from policy_training.rl.train_ppo import (
+    _apply_preset,
+    _make_optimizer,
+    _validate,
+    parser,
+)
 
 
 class DummyRGBEnv(gym.Env):
@@ -281,6 +286,48 @@ class PPOPipelineTest(unittest.TestCase):
         )
         result, _ = value.compute({"states": torch.zeros((3, 5))})
         self.assertEqual(result.shape, (3, 1))
+
+    def test_separate_actor_and_critic_learning_rates(self):
+        observation_space = gym.spaces.Box(0, 255, (3, 64, 64), dtype=np.uint8)
+        action_space = gym.spaces.Box(-1, 1, (4,), dtype=np.float32)
+        policy = ResNetGaussianPolicy(
+            observation_space=observation_space,
+            action_space=action_space,
+            device="cpu",
+            image_size=64,
+            hidden_dim=16,
+            task_embedding_dim=4,
+            mlp_layers=1,
+            pretrained_backbone=False,
+        )
+        value = StateValue(
+            state_space=gym.spaces.Box(-1, 1, (5,), dtype=np.float32),
+            action_space=action_space,
+            device="cpu",
+            hidden_dim=16,
+        )
+        optimizer = _make_optimizer(
+            policy,
+            value,
+            learning_rate=3e-4,
+            backbone_learning_rate=1e-5,
+            actor_head_learning_rate=1e-4,
+            critic_learning_rate=None,
+            eps=1e-5,
+        )
+        self.assertEqual(
+            {group["name"]: group["lr"] for group in optimizer.param_groups},
+            {"actor_backbone": 1e-5, "actor_head": 1e-4, "critic": 3e-4},
+        )
+        optimized = {
+            id(parameter)
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        }
+        expected = {id(parameter) for parameter in policy.parameters()} | {
+            id(parameter) for parameter in value.parameters()
+        }
+        self.assertEqual(optimized, expected)
 
     def test_policy_log_probability_uses_unclipped_sample(self):
         observation_space = gym.spaces.Box(0, 255, (3, 64, 64), dtype=np.uint8)

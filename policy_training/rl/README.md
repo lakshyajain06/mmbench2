@@ -44,6 +44,9 @@ is omitted and ResNet BatchNorm statistics are frozen to keep rollout and
 update log probabilities consistent. BC checkpoints trained with
 `--context-length N` make the actor stack the current frame and `N-1` preceding
 frames automatically; resets pad the history by repeating the initial frame.
+For BC fine-tuning, `--backbone-learning-rate`, `--actor-head-learning-rate`,
+and `--critic-learning-rate` can protect pretrained visual features while
+training new parameters faster. Unspecified group rates use `--learning-rate`.
 
 Output includes:
 
