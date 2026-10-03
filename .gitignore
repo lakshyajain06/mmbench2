@@ -26,6 +26,14 @@ data/
 *.pt
 *.npz
 
+# Local research outputs and working notes
+/artifacts/
+/evaluation/
+/mmbench2-finetuned/
+/notes/
+/policy_training/runs/
+/training/runs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

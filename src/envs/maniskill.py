@@ -3,6 +3,7 @@ warnings.filterwarnings('ignore')
 
 import gymnasium as gym
 import numpy as np
+import torch
 import mani_skill.envs
 from mani_skill.utils.wrappers import CPUGymWrapper
 
@@ -354,6 +355,172 @@ class ManiSkillWrapper(gym.Wrapper):
 
 	def render(self, *args, **kwargs):
 		return self.env.render()
+
+
+class ManiSkillGPUWrapper(gym.Wrapper):
+	"""MMBench semantics for ManiSkill's native batched GPU environment.
+
+	Unlike :class:`ManiSkillWrapper`, this wrapper intentionally keeps every
+	value as a batched torch tensor on the simulator device.  It also obtains
+	the policy image from the same human render camera used by the MMBench data
+	collector, so a visual BC checkpoint sees the same observation source when
+	it is fine-tuned online.
+	"""
+
+	def __init__(self, env, cfg, max_episode_steps):
+		super().__init__(env)
+		self.cfg = cfg
+		self.num_envs = int(cfg.num_envs)
+		self.context_length = int(cfg.get('context_length', 1))
+		self.max_episode_steps = int(max_episode_steps)
+		observation_shape = (3, cfg.render_size, cfg.render_size)
+		if self.context_length > 1:
+			observation_shape = (self.context_length,) + observation_shape
+		self.single_observation_space = gym.spaces.Box(
+			low=0,
+			high=255,
+			shape=observation_shape,
+			dtype=np.uint8,
+		)
+		# skrl's ManiSkill adapter reads the single spaces and performs the
+		# vector API/autoreset conversion itself.
+		self.observation_space = self.single_observation_space
+		self.single_action_space = env.single_action_space
+		self.action_space = env.action_space
+		self._elapsed_steps = torch.zeros(
+			self.num_envs, dtype=torch.int64, device=env.unwrapped.device
+		)
+		self._cumulative_reward = torch.zeros(
+			self.num_envs, dtype=torch.float32, device=env.unwrapped.device
+		)
+		self._frame_history = None
+
+	@property
+	def device(self):
+		return self.env.unwrapped.device
+
+	@property
+	def unwrapped(self):
+		# skrl intentionally inspects ``env.unwrapped`` for spaces/device. Keep
+		# this MMBench adapter as that boundary instead of exposing ManiSkill's
+		# privileged state observation space underneath it.
+		return self
+
+	def _rgb(self):
+		frame = self.env.unwrapped.render_rgb_array()
+		frame = torch.as_tensor(frame, device=self.device)
+		if frame.ndim == 3:
+			frame = frame.unsqueeze(0)
+		if frame.ndim != 4 or frame.shape[-1] not in (3, 4):
+			raise ValueError(f'Expected batched NHWC RGB renders, got {tuple(frame.shape)}')
+		return frame[..., :3].permute(0, 3, 1, 2).contiguous().to(torch.uint8)
+
+	def _reset_history(self, frame, options):
+		if self.context_length == 1:
+			return frame
+		indices = None if not options else options.get('env_idx')
+		if self._frame_history is None or indices is None:
+			self._frame_history = frame[:, None].expand(
+				-1, self.context_length, -1, -1, -1
+			).clone()
+		else:
+			indices = torch.as_tensor(indices, device=self.device, dtype=torch.long)
+			self._frame_history[indices] = frame[indices, None].expand(
+				-1, self.context_length, -1, -1, -1
+			)
+		return self._frame_history
+
+	def _append_history(self, frame):
+		if self.context_length == 1:
+			return frame
+		if self._frame_history is None:
+			return self._reset_history(frame, None)
+		self._frame_history = torch.cat(
+			(self._frame_history[:, 1:], frame[:, None]), dim=1
+		)
+		return self._frame_history
+
+	def _score(self, success):
+		if 'cartpole' in self.cfg.task:
+			return self._cumulative_reward / 1000
+		if 'hopper' in self.cfg.task:
+			return self._cumulative_reward / 600
+		if 'ant' in self.cfg.task:
+			return self._cumulative_reward.clamp(0, 1000) / 1000
+		return success.float()
+
+	def _reset_indices(self, options):
+		if options and options.get('env_idx') is not None:
+			indices = torch.as_tensor(options['env_idx'], device=self.device, dtype=torch.long)
+			self._elapsed_steps[indices] = 0
+			self._cumulative_reward[indices] = 0
+		else:
+			self._elapsed_steps.zero_()
+			self._cumulative_reward.zero_()
+
+	def reset(self, *, seed=None, options=None):
+		_, info = self.env.reset(seed=seed, options=options)
+		self._reset_indices(options)
+		return self._reset_history(self._rgb(), options), info
+
+	def step(self, action):
+		reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+		info = {}
+		truncated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+		# Preserve MMBench's two simulator steps per policy action. ManiSkill
+		# task terminations are ignored just like CPUGymWrapper(...,
+		# ignore_terminations=True) in the single-environment path.
+		for _ in range(2):
+			_, step_reward, _, step_truncated, info = self.env.step(action)
+			reward += step_reward
+			truncated |= step_truncated.bool()
+		self._elapsed_steps += 1
+		self._cumulative_reward += reward
+		truncated |= self._elapsed_steps >= self.max_episode_steps
+		terminated = torch.zeros_like(truncated)
+		info = dict(info)
+		success = info.get('success', torch.zeros_like(truncated)).bool()
+		info['success'] = success
+		info['score'] = self._score(success)
+		return self._append_history(self._rgb()), reward, terminated, truncated, info
+
+	def render(self, *args, **kwargs):
+		return self.env.unwrapped.render_rgb_array()
+
+
+def _configure_task(env, cfg):
+	"""Apply MMBench task-specific object overrides before the first rollout."""
+	task_cfg = MANISKILL_TASKS[cfg.task]
+	if cfg.task.startswith('ms-pick-') and task_cfg['env'] == 'PickSingleYCB-v1':
+		env.unwrapped.all_model_ids = [task_cfg['model_id']]
+		env.reset(options=dict(reconfigure=True))
+	if cfg.task.startswith('ms-push-') and cfg.task != 'ms-push-cube':
+		env.unwrapped.model_id = task_cfg['model_id']
+		if 'spawn_height' in task_cfg:
+			env.unwrapped.spawn_height = task_cfg['spawn_height']
+		env.reset(options=dict(reconfigure=True))
+
+
+def make_gpu_env(cfg):
+	"""Create one native GPU-vectorized MMBench ManiSkill environment."""
+	if cfg.task not in MANISKILL_TASKS:
+		raise ValueError('Unknown task:', cfg.task)
+	if cfg.get('obs', 'rgb') != 'rgb':
+		raise ValueError('The visual RL GPU environment currently requires obs="rgb"')
+	task_cfg = MANISKILL_TASKS[cfg.task]
+	env = gym.make(
+		task_cfg['env'],
+		obs_mode='state',
+		control_mode=task_cfg['control_mode'],
+		num_envs=cfg.num_envs,
+		render_mode='rgb_array',
+		sensor_configs=dict(width=cfg.render_size, height=cfg.render_size),
+		human_render_camera_configs=dict(width=cfg.render_size, height=cfg.render_size),
+		reconfiguration_freq=None,
+		sim_backend=cfg.get('sim_backend', 'physx_cuda'),
+	)
+	_configure_task(env, cfg)
+	return ManiSkillGPUWrapper(env, cfg, task_cfg['max_episode_steps'])
 	
 
 def make_env(cfg):

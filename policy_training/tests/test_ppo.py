@@ -1,0 +1,123 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+import gymnasium as gym
+import numpy as np
+import torch
+
+from policy_training.bc.resnet_mlp_model import ResNetMLPPolicy
+from policy_training.rl.env import RGBObservation
+from policy_training.rl.ppo import (
+    ResNetGaussianPolicy,
+    initialize_policy_from_bc,
+    load_portable_policy,
+    save_portable_checkpoint,
+)
+
+
+class DummyRGBEnv(gym.Env):
+    def __init__(self):
+        self.observation_space = gym.spaces.Dict(
+            {
+                "rgb": gym.spaces.Box(0, 255, (3, 64, 64), dtype=np.uint8),
+                "state": gym.spaces.Box(-np.inf, np.inf, (5,), dtype=np.float32),
+            }
+        )
+        self.action_space = gym.spaces.Box(-1, 1, (4,), dtype=np.float32)
+        self.steps = 0
+
+    def reset(self, *, seed=None, options=None):
+        self.steps = 0
+        return {
+            "rgb": np.zeros((3, 64, 64), dtype=np.uint8),
+            "state": np.zeros(5, dtype=np.float32),
+        }, {}
+
+    def step(self, action):
+        self.steps += 1
+        done = self.steps >= 2
+        observation = {
+            "rgb": np.zeros((3, 64, 64), dtype=np.uint8),
+            "state": np.zeros(5, dtype=np.float32),
+        }
+        return observation, 1.0, False, done, {"success": float(done)}
+
+
+class PPOPipelineTest(unittest.TestCase):
+    def test_rgb_wrapper(self):
+        env = RGBObservation(DummyRGBEnv())
+        observation, _ = env.reset()
+        self.assertEqual(observation.shape, (3, 64, 64))
+        _, _, _, _, info = env.step(np.zeros(4, dtype=np.float32))
+        self.assertIn("is_success", info)
+
+    def test_full_bc_actor_initialization_and_portable_checkpoint(self):
+        bc = ResNetMLPPolicy(
+            num_tasks=1,
+            context_length=2,
+            chunk_size=3,
+            action_dim=16,
+            hidden_dim=32,
+            task_embedding_dim=8,
+            mlp_layers=1,
+            dropout=0.0,
+            pretrained_backbone=False,
+        )
+        checkpoint = {
+            "policy_type": "resnet_mlp_visual_bc",
+            "tasks": ["ms-test"],
+            "model": bc.state_dict(),
+            "model_config": {
+                "context_length": 2,
+                "hidden_dim": 32,
+                "task_embedding_dim": 8,
+                "mlp_layers": 1,
+                "dropout": 0.0,
+            },
+        }
+        observation_space = gym.spaces.Box(0, 255, (2, 3, 64, 64), dtype=np.uint8)
+        action_space = gym.spaces.Box(-1, 1, (4,), dtype=np.float32)
+        policy = ResNetGaussianPolicy(
+            observation_space=observation_space,
+            action_space=action_space,
+            device="cpu",
+            image_size=64,
+            context_length=2,
+            hidden_dim=32,
+            task_embedding_dim=8,
+            mlp_layers=1,
+            pretrained_backbone=False,
+        ).to("cpu")
+        initialize_policy_from_bc(policy, checkpoint, 0)
+        torch.testing.assert_close(policy.backbone.conv1.weight, bc.backbone.conv1.weight)
+        torch.testing.assert_close(policy.mlp[0].weight, bc.mlp[0].weight)
+        torch.testing.assert_close(policy.mlp[4].weight, bc.mlp[4].weight[:4])
+        observation = np.zeros((2, 3, 64, 64), dtype=np.uint8)
+        bc.eval()
+        policy.eval()
+        with torch.no_grad():
+            expected = bc(
+                torch.from_numpy(observation)[None], torch.tensor([0])
+            )["actions"][0, 0, :4].numpy()
+        np.testing.assert_allclose(policy.predict(observation), expected, atol=1e-6)
+
+        metadata = {
+            "task": "ms-test",
+            "action_dim": 4,
+            "image_size": 64,
+            "context_length": 2,
+            "hidden_dim": 32,
+            "task_embedding_dim": 8,
+            "mlp_layers": 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.pt"
+            save_portable_checkpoint(path, policy, None, metadata)
+            loaded, loaded_metadata = load_portable_policy(path, device="cpu")
+            self.assertEqual(loaded_metadata["task"], "ms-test")
+            np.testing.assert_allclose(loaded.predict(observation), expected, atol=1e-6)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -148,6 +148,8 @@ def sample_one_timestep_packed(
     z_prev: Optional[torch.Tensor] = None,     # (B,n_spatial,d_spatial) previous latent for warm start
     tau_init: float = 0.0,                      # warm-start noise level (0 = pure noise)
     use_kv_cache: bool = False,                 # enable KV caching for context tokens
+    initial_noise: Optional[torch.Tensor] = None, # caller-supplied (B,1,S,D) noise
+    per_sample_instability: bool = False,       # return one u_f value per batch row
 ) -> Union[Tuple[torch.Tensor, float], Tuple[torch.Tensor, torch.Tensor, float]]:
     """
     Generate next packed latent z_{t}: (B,n_spatial,d_spatial) given past length t.
@@ -182,7 +184,10 @@ def sample_one_timestep_packed(
     dt = float(sched["dt"])
 
     # Initialize from noise, optionally warm-started toward z_prev
-    z = torch.randn((B, 1, n_spatial, d_spatial), device=device, dtype=dtype)
+    z = (torch.randn((B, 1, n_spatial, d_spatial), device=device, dtype=dtype)
+         if initial_noise is None else initial_noise.to(device=device, dtype=dtype))
+    if z.shape != (B, 1, n_spatial, d_spatial):
+        raise ValueError('initial_noise has wrong shape')
     if z_prev is not None and tau_init > 0.0:
         zp = z_prev.unsqueeze(1) if z_prev.dim() == 3 else z_prev  # (B,1,n_spatial,d_spatial)
         z = ((1.0 - tau_init) * z.float() + tau_init * zp.float()).to(dtype)
@@ -278,7 +283,9 @@ def sample_one_timestep_packed(
 
         x1_hat_f = x1_hat.float()
         if x1_hat_prev is not None:
-            step_deltas.append((x1_hat_f - x1_hat_prev).pow(2).mean().sqrt())
+            delta = (x1_hat_f - x1_hat_prev).pow(2)
+            step_deltas.append(delta.mean(dim=(1, 2, 3)).sqrt()
+                               if per_sample_instability else delta.mean().sqrt())
         x1_hat_prev = x1_hat_f
 
         denom = max(1e-4, 1.0 - tau_i)
@@ -291,9 +298,9 @@ def sample_one_timestep_packed(
     if step_deltas:
         all_deltas = torch.stack(step_deltas)
         tail = all_deltas[len(all_deltas) // 2 :] if len(all_deltas) > 1 else all_deltas
-        instability = float(tail.mean().item())
+        instability = tail.mean(dim=0) if per_sample_instability else float(tail.mean().item())
     else:
-        instability = 0.0
+        instability = torch.zeros(B, device=device) if per_sample_instability else 0.0
 
     z_next = z[:, 0]  # (B,n_spatial,d_spatial)
 
