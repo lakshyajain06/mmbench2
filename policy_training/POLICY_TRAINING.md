@@ -82,6 +82,53 @@ After PickCube is stable, proceed through reach and fixed-object pick tasks,
 xArm6 variants, then push, pull, stack, place, and tool tasks. Multi-task and
 transfer experiments come after reproducible single-task baselines.
 
+## Execution log
+
+### 2026-10-03: ManiSkill state PickCube reference reproduced
+
+Status: passed.
+
+- Source: upstream `haosulab/ManiSkill` commit
+  `62ff3a5896b4d5b4cf0ac4c8d79afe600c9404a3`.
+- Script: unmodified `examples/baselines/ppo/ppo.py`.
+- Runtime: Python 3.10.21, ManiSkill 3.0.0b21, PyTorch 2.8.0+cu128,
+  NVIDIA GeForce RTX 5090.
+- Training command:
+
+  ```sh
+  python ppo.py --env_id=PickCube-v1 \
+    --num_envs=1024 --update_epochs=8 --num_minibatches=32 \
+    --total_timesteps=10_000_000 --no-capture-video \
+    --exp-name=mmbench2-reference-pickcube-state-seed0
+  ```
+
+- The first evaluation had 0% success. Success-once and success-at-end both
+  reached 100% by 3.84 million transitions and remained at 100% through all
+  subsequent evaluations.
+- A separate evaluation of `final_ckpt.pt` used 16 environments for 50 steps.
+  It achieved 100% success-once, 100% success-at-end, and mean return 39.47.
+- The official script emitted a harmless interpreter-shutdown cleanup warning
+  after saving/evaluating the checkpoint; training and evaluation exited
+  successfully.
+
+This clears the state half of Stage 1 and demonstrates that the local
+ManiSkill/GPU stack can learn PickCube. The RGB-plus-state reference remains
+the next Stage 1 experiment.
+
+### 2026-10-03: PPO boundary correctness
+
+Status: implemented and tested.
+
+- Native ManiSkill partial auto-resets now preserve terminal observations.
+- skrl timeout value bootstrapping uses terminal observations while the next
+  rollout step continues from reset observations.
+- PPO stores the original Gaussian action and matching log probability; only
+  the action passed to the environment is clipped.
+- Regression tests cover mixed partial reset, terminal-observation selection,
+  and saturated-action log-probability consistency.
+- A GPU smoke test confirmed the configured 25-policy-step horizon and
+  terminal/reset observation separation on `ms-pick-cube`.
+
 ## Deferred work
 
 - Deep refactoring or a unified policy interface.
