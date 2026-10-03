@@ -396,6 +396,42 @@ def evaluate_ppo(
 class EvaluationPPO(PPO):
     """PPO with a generic periodic hook expressed in environment samples."""
 
+    def record_transition(
+        self,
+        *,
+        observations: torch.Tensor,
+        states: torch.Tensor | None,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        next_observations: torch.Tensor,
+        next_states: torch.Tensor | None,
+        terminated: torch.Tensor,
+        truncated: torch.Tensor,
+        infos: Any,
+        timestep: int,
+        timesteps: int,
+    ) -> None:
+        bootstrap_observations = final_observations_for_bootstrap(
+            next_observations, truncated, infos
+        )
+        super().record_transition(
+            observations=observations,
+            states=states,
+            actions=actions,
+            rewards=rewards,
+            next_observations=bootstrap_observations,
+            next_states=next_states,
+            terminated=terminated,
+            truncated=truncated,
+            infos=infos,
+            timestep=timestep,
+            timesteps=timesteps,
+        )
+        # The trainer must continue from the reset observations. Only the
+        # one-step timeout value above should use terminal observations.
+        if self.training:
+            self._current_next_observations = next_observations
+
     def set_periodic_hook(
         self, hook: Callable[["EvaluationPPO", int], None] | None, *, num_envs: int
     ) -> None:
@@ -407,3 +443,30 @@ class EvaluationPPO(PPO):
         hook = getattr(self, "_periodic_hook", None)
         if hook is not None:
             hook(self, (timestep + 1) * self._hook_num_envs)
+
+
+def final_observations_for_bootstrap(
+    next_observations: torch.Tensor,
+    truncated: torch.Tensor,
+    infos: Any,
+) -> torch.Tensor:
+    """Replace auto-reset observations with terminal ones for timeout values."""
+    if not isinstance(infos, dict) or "final_observation" not in infos:
+        return next_observations
+    final_observation = infos["final_observation"]
+    if not isinstance(final_observation, torch.Tensor):
+        return next_observations
+    mask = truncated.flatten().bool()
+    available = infos.get("_final_observation")
+    if isinstance(available, torch.Tensor):
+        mask &= available.flatten().bool()
+    if not mask.any():
+        return next_observations
+    if final_observation.shape != next_observations.shape:
+        raise ValueError(
+            "final_observation shape does not match next_observations: "
+            f"{tuple(final_observation.shape)} != {tuple(next_observations.shape)}"
+        )
+    result = next_observations.clone()
+    result[mask] = final_observation[mask]
+    return result

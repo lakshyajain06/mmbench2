@@ -7,9 +7,10 @@ import numpy as np
 import torch
 
 from policy_training.bc.resnet_mlp_model import ResNetMLPPolicy
-from policy_training.rl.env import RGBObservation
+from policy_training.rl.env import MMBenchManiSkillEnv, RGBObservation
 from policy_training.rl.ppo import (
     ResNetGaussianPolicy,
+    final_observations_for_bootstrap,
     initialize_policy_from_bc,
     load_portable_policy,
     save_portable_checkpoint,
@@ -117,6 +118,60 @@ class PPOPipelineTest(unittest.TestCase):
             loaded, loaded_metadata = load_portable_policy(path, device="cpu")
             self.assertEqual(loaded_metadata["task"], "ms-test")
             np.testing.assert_allclose(loaded.predict(observation), expected, atol=1e-6)
+
+    def test_partial_autoreset_preserves_final_observation(self):
+        class TensorEnv:
+            num_envs = 2
+            device = torch.device("cpu")
+            cfg = type("Cfg", (), {"seed": 7})()
+            single_observation_space = gym.spaces.Box(
+                -1000, 1000, (1,), dtype=np.float32
+            )
+            single_action_space = gym.spaces.Box(-1, 1, (1,), dtype=np.float32)
+
+            def __init__(self):
+                self.observation = torch.tensor([[1.0], [2.0]])
+
+            def reset(self, *, seed=None, options=None):
+                if options is not None:
+                    self.observation[options["env_idx"]] = 100.0
+                return self.observation.clone(), {"reset": True}
+
+            def step(self, action):
+                self.observation = torch.tensor([[10.0], [20.0]])
+                return (
+                    self.observation.clone(),
+                    torch.ones(2),
+                    torch.zeros(2, dtype=torch.bool),
+                    torch.tensor([True, False]),
+                    {"terminal": True},
+                )
+
+            def close(self):
+                pass
+
+        env = MMBenchManiSkillEnv(TensorEnv())
+        env.reset()
+        observation, _, _, truncated, info = env.step(torch.zeros((2, 1)))
+        torch.testing.assert_close(observation, torch.tensor([[100.0], [20.0]]))
+        torch.testing.assert_close(
+            info["final_observation"], torch.tensor([[10.0], [20.0]])
+        )
+        torch.testing.assert_close(truncated, torch.tensor([[True], [False]]))
+
+    def test_timeout_bootstrap_uses_final_not_reset_observation(self):
+        reset_observation = torch.tensor([[100.0], [200.0]])
+        final_observation = torch.tensor([[10.0], [20.0]])
+        truncated = torch.tensor([[True], [False]])
+        selected = final_observations_for_bootstrap(
+            reset_observation,
+            truncated,
+            {
+                "final_observation": final_observation,
+                "_final_observation": torch.tensor([True, False]),
+            },
+        )
+        torch.testing.assert_close(selected, torch.tensor([[10.0], [200.0]]))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
+import torch
 
 
 def _add_source_root() -> None:
@@ -117,6 +118,90 @@ class _RLEnvCfg:
         return getattr(self, key, default)
 
 
+class MMBenchManiSkillEnv:
+    """Adapt native ManiSkill tensors to skrl without losing terminal frames."""
+
+    def __init__(self, env):
+        self._env = env
+        self._observations = None
+        self._reset_once = True
+
+    @property
+    def device(self):
+        return torch.device(self._env.device)
+
+    @property
+    def num_envs(self):
+        return self._env.num_envs
+
+    @property
+    def observation_space(self):
+        return self._env.single_observation_space
+
+    @property
+    def action_space(self):
+        return self._env.single_action_space
+
+    @property
+    def state_space(self):
+        return None
+
+    def state(self):
+        return None
+
+    @staticmethod
+    def _flatten(space, value):
+        from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space
+
+        return flatten_tensorized_space(tensorize_space(space, value))
+
+    def reset(self):
+        if self._reset_once:
+            observation, info = self._env.reset(seed=self._env.cfg.seed)
+            self._observations = self._flatten(self.observation_space, observation)
+            self._reset_once = False
+            return self._observations, info
+        return self._observations, {}
+
+    def step(self, actions):
+        from skrl.utils.spaces.torch import unflatten_tensorized_space
+
+        actions = unflatten_tensorized_space(self.action_space, actions)
+        with torch.no_grad():
+            observation, reward, terminated, truncated, info = self._env.step(actions)
+            flattened = self._flatten(self.observation_space, observation)
+            done = (terminated | truncated).flatten()
+            if done.any():
+                final_observation = flattened.clone()
+                final_info = info
+                env_idx = torch.arange(self.num_envs, device=done.device)[done]
+                observation, reset_info = self._env.reset(options={"env_idx": env_idx})
+                flattened = self._flatten(self.observation_space, observation)
+                info = dict(reset_info)
+                info.update(
+                    {
+                        "final_observation": final_observation,
+                        "final_info": final_info,
+                        "_final_observation": done,
+                        "_final_info": done,
+                    }
+                )
+            self._observations = flattened
+        return (
+            flattened,
+            reward.view(-1, 1),
+            terminated.view(-1, 1),
+            truncated.view(-1, 1),
+            info,
+        )
+
+    def render(self, *args, **kwargs):
+        return self._env.render(*args, **kwargs)
+
+    def close(self):
+        self._env.close()
+
+
 def make_training_env(
     task: str,
     *,
@@ -144,9 +229,7 @@ def make_training_env(
             task, num_envs, image_size, context_length, seed, sim_backend
         )
         env = make_gpu_env(cfg)
-        # The explicit tag ensures skrl adds ManiSkillVectorEnv/autoreset while
-        # retaining torch tensors on the simulator device.
-        return wrap_env(env, wrapper="mani-skill")
+        return MMBenchManiSkillEnv(env)
 
     def factory(index):
         env = make_rgb_env(task, seed=seed + index, image_size=image_size)
