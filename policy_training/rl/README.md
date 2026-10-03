@@ -48,6 +48,7 @@ Output includes:
 ```text
 OUTPUT/
   config.json
+  run_metadata.json          # Git revision, package versions, and hardware
   final.pt                 # portable policy used by eval_ppo
   final_agent.pt           # full skrl state, including optimizer
   latest_eval.pt
@@ -73,6 +74,8 @@ python -m policy_training.rl.eval_ppo \
 
 The task and image size are read from the checkpoint. `--task` can override the
 task when deliberately testing transfer to another MMBench environment.
+Evaluation reports both success-once and success-at-end; the historical
+`success_rate` field remains an alias for success-once.
 
 ## World model as a Gymnasium environment
 

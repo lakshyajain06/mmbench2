@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import gymnasium as gym
 import numpy as np
@@ -10,6 +11,7 @@ from policy_training.bc.resnet_mlp_model import ResNetMLPPolicy
 from policy_training.rl.env import MMBenchManiSkillEnv, RGBObservation
 from policy_training.rl.ppo import (
     ResNetGaussianPolicy,
+    evaluate_ppo,
     final_observations_for_bootstrap,
     initialize_policy_from_bc,
     load_portable_policy,
@@ -90,6 +92,39 @@ class PPOPipelineTest(unittest.TestCase):
         self.assertEqual(observation.shape, (3, 64, 64))
         _, _, _, _, info = env.step(np.zeros(4, dtype=np.float32))
         self.assertIn("is_success", info)
+
+    def test_evaluation_distinguishes_success_once_and_at_end(self):
+        class TransientSuccessEnv(DummyRGBEnv):
+            def step(self, action):
+                self.steps += 1
+                done = self.steps >= 2
+                observation = {
+                    "rgb": np.zeros((3, 64, 64), dtype=np.uint8),
+                    "state": np.zeros(5, dtype=np.float32),
+                }
+                return observation, 1.0, False, done, {
+                    "success": float(self.steps == 1)
+                }
+
+        class Policy:
+            context_length = 1
+
+            def eval(self):
+                return self
+
+            def predict(self, observation):
+                return np.zeros(4, dtype=np.float32)
+
+        with patch(
+            "policy_training.rl.ppo.make_rgb_env",
+            return_value=RGBObservation(TransientSuccessEnv()),
+        ):
+            metrics = evaluate_ppo(
+                Policy(), "ms-test", episodes=1, seed=0, image_size=64
+            )
+        self.assertEqual(metrics["success_rate"], 1.0)
+        self.assertEqual(metrics["success_once_rate"], 1.0)
+        self.assertEqual(metrics["success_at_end_rate"], 0.0)
 
     def test_full_bc_actor_initialization_and_portable_checkpoint(self):
         bc = ResNetMLPPolicy(

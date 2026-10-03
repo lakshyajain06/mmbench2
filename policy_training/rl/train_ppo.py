@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import math
+import platform
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -153,6 +158,38 @@ def _validate(args: argparse.Namespace) -> None:
         raise ValueError("total-timesteps must cover at least one PPO rollout")
 
 
+def _run_metadata() -> dict:
+    repository_root = Path(__file__).resolve().parents[2]
+
+    def git(*arguments: str) -> str | None:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    packages = {}
+    for package in ("gymnasium", "mani_skill", "numpy", "skrl", "torch", "torchvision"):
+        try:
+            packages[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            packages[package] = None
+    return {
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        "git_commit": git("rev-parse", "HEAD"),
+        "git_dirty": bool(git("status", "--porcelain")),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "packages": packages,
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_version": torch.version.cuda,
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
     _apply_preset(args)
@@ -172,6 +209,10 @@ def main(argv: list[str] | None = None) -> None:
         args.actor_layers = int(bc_config["mlp_layers"])
         args.context_length = int(bc_config.get("context_length", 1))
     (output / "config.json").write_text(json.dumps(vars(args), indent=2) + "\n")
+    run_metadata = _run_metadata()
+    (output / "run_metadata.json").write_text(
+        json.dumps(run_metadata, indent=2) + "\n"
+    )
 
     env = make_training_env(
         args.task,
@@ -224,6 +265,7 @@ def main(argv: list[str] | None = None) -> None:
         "mlp_layers": args.actor_layers,
         "num_envs": args.num_envs,
         "sim_backend": args.sim_backend,
+        "run_metadata": run_metadata,
     }
     memory = RandomMemory(
         memory_size=args.n_steps,

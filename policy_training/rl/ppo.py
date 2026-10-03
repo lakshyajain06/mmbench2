@@ -329,7 +329,8 @@ def evaluate_ppo(
     np.random.seed(seed)
     torch.manual_seed(seed)
     env = make_rgb_env(task, seed=seed, image_size=image_size)
-    successes: list[float] = []
+    successes_once: list[float] = []
+    successes_at_end: list[float] = []
     returns: list[float] = []
     lengths: list[int] = []
     video_paths: list[str] = []
@@ -349,7 +350,8 @@ def evaluate_ppo(
                 writer = imageio.get_writer(video_path, fps=video_fps, codec="libx264")
                 writer.append_data(_video_frame(observation))
                 video_paths.append(str(video_path))
-            success = float(np.asarray(info.get("success", 0.0)).reshape(-1)[0])
+            success_once = float(np.asarray(info.get("success", 0.0)).reshape(-1)[0])
+            success_at_end = success_once
             episode_return = 0.0
             length = 0
             done = False
@@ -365,14 +367,16 @@ def evaluate_ppo(
                         writer.append_data(_video_frame(observation))
                     episode_return += float(reward)
                     length += 1
-                    success = max(
-                        success, float(np.asarray(info.get("success", 0.0)).reshape(-1)[0])
+                    success_at_end = float(
+                        np.asarray(info.get("success", 0.0)).reshape(-1)[0]
                     )
+                    success_once = max(success_once, success_at_end)
                     done = bool(terminated or truncated)
             finally:
                 if writer is not None:
                     writer.close()
-            successes.append(float(success > 0))
+            successes_once.append(float(success_once > 0))
+            successes_at_end.append(float(success_at_end > 0))
             returns.append(episode_return)
             lengths.append(length)
     finally:
@@ -385,7 +389,10 @@ def evaluate_ppo(
 
     metrics = {
         "episodes": episodes,
-        "success_rate": float(np.mean(successes)),
+        # Keep success_rate as the historical success-once alias.
+        "success_rate": float(np.mean(successes_once)),
+        "success_once_rate": float(np.mean(successes_once)),
+        "success_at_end_rate": float(np.mean(successes_at_end)),
         "mean_return": float(np.mean(returns)),
         "return_std": float(np.std(returns)),
         "mean_length": float(np.mean(lengths)),
