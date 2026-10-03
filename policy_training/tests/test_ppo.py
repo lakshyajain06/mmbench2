@@ -11,8 +11,10 @@ from policy_training.bc.resnet_mlp_model import ResNetMLPPolicy
 from policy_training.rl.env import MMBenchManiSkillEnv, RGBObservation
 from policy_training.rl.ppo import (
     ResNetGaussianPolicy,
+    StateValue,
     evaluate_ppo,
     final_observations_for_bootstrap,
+    final_states_for_bootstrap,
     initialize_policy_from_bc,
     load_portable_policy,
     save_portable_checkpoint,
@@ -200,20 +202,27 @@ class PPOPipelineTest(unittest.TestCase):
             single_observation_space = gym.spaces.Box(
                 -1000, 1000, (1,), dtype=np.float32
             )
+            single_state_space = gym.spaces.Box(-1000, 1000, (1,), dtype=np.float32)
             single_action_space = gym.spaces.Box(-1, 1, (1,), dtype=np.float32)
 
             def __init__(self):
                 self.observation = torch.tensor([[1.0], [2.0]])
+                self.privileged_state = torch.tensor([[3.0], [4.0]])
                 self.last_action = None
 
             def reset(self, *, seed=None, options=None):
                 if options is not None:
                     self.observation[options["env_idx"]] = 100.0
+                    self.privileged_state[options["env_idx"]] = 1000.0
                 return self.observation.clone(), {"reset": True}
+
+            def state(self):
+                return self.privileged_state.clone()
 
             def step(self, action):
                 self.last_action = action.clone()
                 self.observation = torch.tensor([[10.0], [20.0]])
+                self.privileged_state = torch.tensor([[30.0], [40.0]])
                 return (
                     self.observation.clone(),
                     torch.ones(2),
@@ -236,6 +245,7 @@ class PPOPipelineTest(unittest.TestCase):
         torch.testing.assert_close(
             info["final_observation"], torch.tensor([[10.0], [20.0]])
         )
+        torch.testing.assert_close(info["final_state"], torch.tensor([[30.0], [40.0]]))
         torch.testing.assert_close(truncated, torch.tensor([[True], [False]]))
 
     def test_timeout_bootstrap_uses_final_not_reset_observation(self):
@@ -251,6 +261,26 @@ class PPOPipelineTest(unittest.TestCase):
             },
         )
         torch.testing.assert_close(selected, torch.tensor([[10.0], [200.0]]))
+
+        selected_states = final_states_for_bootstrap(
+            torch.tensor([[1000.0], [2000.0]]),
+            truncated,
+            {
+                "final_state": torch.tensor([[30.0], [40.0]]),
+                "_final_observation": torch.tensor([True, False]),
+            },
+        )
+        torch.testing.assert_close(selected_states, torch.tensor([[30.0], [2000.0]]))
+
+    def test_privileged_state_value(self):
+        value = StateValue(
+            state_space=gym.spaces.Box(-1, 1, (5,), dtype=np.float32),
+            action_space=gym.spaces.Box(-1, 1, (4,), dtype=np.float32),
+            device="cpu",
+            hidden_dim=16,
+        )
+        result, _ = value.compute({"states": torch.zeros((3, 5))})
+        self.assertEqual(result.shape, (3, 1))
 
     def test_policy_log_probability_uses_unclipped_sample(self):
         observation_space = gym.spaces.Box(0, 255, (3, 64, 64), dtype=np.uint8)

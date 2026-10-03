@@ -387,6 +387,9 @@ class ManiSkillGPUWrapper(gym.Wrapper):
 		self.observation_space = self.single_observation_space
 		self.single_action_space = env.single_action_space
 		self.action_space = env.action_space
+		self.single_state_space = env.single_observation_space
+		self.state_space = self.single_state_space
+		self._state = None
 		self._elapsed_steps = torch.zeros(
 			self.num_envs, dtype=torch.int64, device=env.unwrapped.device
 		)
@@ -459,9 +462,13 @@ class ManiSkillGPUWrapper(gym.Wrapper):
 			self._cumulative_reward.zero_()
 
 	def reset(self, *, seed=None, options=None):
-		_, info = self.env.reset(seed=seed, options=options)
+		state, info = self.env.reset(seed=seed, options=options)
+		self._state = state
 		self._reset_indices(options)
 		return self._reset_history(self._rgb(), options), info
+
+	def state(self):
+		return self._state
 
 	def step(self, action):
 		reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
@@ -471,9 +478,10 @@ class ManiSkillGPUWrapper(gym.Wrapper):
 		# task terminations are ignored just like CPUGymWrapper(...,
 		# ignore_terminations=True) in the single-environment path.
 		for _ in range(2):
-			_, step_reward, _, step_truncated, info = self.env.step(action)
+			state, step_reward, _, step_truncated, info = self.env.step(action)
 			reward += step_reward
 			truncated |= step_truncated.bool()
+		self._state = state
 		self._elapsed_steps += 1
 		self._cumulative_reward += reward
 		truncated |= self._elapsed_steps >= self.max_episode_steps

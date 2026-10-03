@@ -197,6 +197,37 @@ class ResNetValue(DeterministicMixin, _VisualModel):
         return self.value(visual), {}
 
 
+class StateValue(DeterministicMixin, Model):
+    """Privileged-state critic used only while training the RGB actor."""
+
+    def __init__(
+        self,
+        *,
+        state_space: gym.Space,
+        action_space: gym.Space,
+        device: str | torch.device,
+        hidden_dim: int = 256,
+    ) -> None:
+        Model.__init__(
+            self,
+            observation_space=state_space,
+            action_space=action_space,
+            device=device,
+        )
+        DeterministicMixin.__init__(self, clip_actions=False)
+        state_dim = gym.spaces.utils.flatdim(state_space)
+        self.value = torch.nn.Sequential(
+            torch.nn.Linear(state_dim, hidden_dim),
+            torch.nn.Tanh(),
+            torch.nn.Linear(hidden_dim, hidden_dim),
+            torch.nn.Tanh(),
+            torch.nn.Linear(hidden_dim, 1),
+        )
+
+    def compute(self, inputs: dict[str, Any], role: str = ""):
+        return self.value(inputs["states"].float()), {}
+
+
 def load_bc_policy_metadata(checkpoint_path: str | Path, task: str) -> tuple[dict, int]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if checkpoint.get("policy_type") != "resnet_mlp_visual_bc":
@@ -240,7 +271,7 @@ def initialize_policy_from_bc(
 def save_portable_checkpoint(
     path: str | Path,
     policy: ResNetGaussianPolicy,
-    value: ResNetValue | None,
+    value: Model | None,
     metadata: dict[str, Any],
 ) -> None:
     path = Path(path)
@@ -424,13 +455,14 @@ class EvaluationPPO(PPO):
         bootstrap_observations = final_observations_for_bootstrap(
             next_observations, truncated, infos
         )
+        bootstrap_states = final_states_for_bootstrap(next_states, truncated, infos)
         super().record_transition(
             observations=observations,
             states=states,
             actions=actions,
             rewards=rewards,
             next_observations=bootstrap_observations,
-            next_states=next_states,
+            next_states=bootstrap_states,
             terminated=terminated,
             truncated=truncated,
             infos=infos,
@@ -441,6 +473,7 @@ class EvaluationPPO(PPO):
         # one-step timeout value above should use terminal observations.
         if self.training:
             self._current_next_observations = next_observations
+            self._current_next_states = next_states
 
     def set_periodic_hook(
         self, hook: Callable[["EvaluationPPO", int], None] | None, *, num_envs: int
@@ -479,4 +512,31 @@ def final_observations_for_bootstrap(
         )
     result = next_observations.clone()
     result[mask] = final_observation[mask]
+    return result
+
+
+def final_states_for_bootstrap(
+    next_states: torch.Tensor | None,
+    truncated: torch.Tensor,
+    infos: Any,
+) -> torch.Tensor | None:
+    """Replace auto-reset states with terminal states for timeout values."""
+    if next_states is None or not isinstance(infos, dict):
+        return next_states
+    final_state = infos.get("final_state")
+    if not isinstance(final_state, torch.Tensor):
+        return next_states
+    mask = truncated.flatten().bool()
+    available = infos.get("_final_observation")
+    if isinstance(available, torch.Tensor):
+        mask &= available.flatten().bool()
+    if not mask.any():
+        return next_states
+    if final_state.shape != next_states.shape:
+        raise ValueError(
+            "final_state shape does not match next_states: "
+            f"{tuple(final_state.shape)} != {tuple(next_states.shape)}"
+        )
+    result = next_states.clone()
+    result[mask] = final_state[mask]
     return result

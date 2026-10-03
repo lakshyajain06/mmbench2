@@ -144,10 +144,11 @@ class MMBenchManiSkillEnv:
 
     @property
     def state_space(self):
-        return None
+        return self._env.single_state_space
 
     def state(self):
-        return None
+        state = self._env.state()
+        return self._flatten(self.state_space, state) if state is not None else None
 
     @staticmethod
     def _flatten(space, value):
@@ -175,6 +176,9 @@ class MMBenchManiSkillEnv:
                 environment_actions
             )
             flattened = self._flatten(self.observation_space, observation)
+            final_state = self.state()
+            if final_state is not None:
+                final_state = final_state.clone()
             done = (terminated | truncated).flatten()
             if done.any():
                 final_observation = flattened.clone()
@@ -186,6 +190,7 @@ class MMBenchManiSkillEnv:
                 info.update(
                     {
                         "final_observation": final_observation,
+                        "final_state": final_state,
                         "final_info": final_info,
                         "_final_observation": done,
                         "_final_info": done,

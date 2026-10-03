@@ -36,12 +36,14 @@ are all measured in total transitions across environments. The default
 when the BC checkpoint was trained from 224-pixel strips.
 
 The actor restores the BC ResNet, selected task embedding, full MLP, and the
-first action in the BC chunk. PPO adds a Gaussian standard deviation and an
-independent visual critic. Actor dropout is omitted and ResNet BatchNorm
-statistics are frozen to keep rollout and update log probabilities consistent.
-BC checkpoints trained with `--context-length N` make PPO stack the current
-frame and `N-1` preceding frames automatically. Both actor and critic receive
-that ordered history; resets pad it by repeating the initial observation.
+first action in the BC chunk. PPO adds a Gaussian standard deviation. The
+`maniskill` preset uses a privileged simulator-state critic while keeping the
+actor RGB-only; state is never required by the exported actor. Use
+`--critic-input rgb` for the previous independent visual critic. Actor dropout
+is omitted and ResNet BatchNorm statistics are frozen to keep rollout and
+update log probabilities consistent. BC checkpoints trained with
+`--context-length N` make the actor stack the current frame and `N-1` preceding
+frames automatically; resets pad the history by repeating the initial frame.
 
 Output includes:
 

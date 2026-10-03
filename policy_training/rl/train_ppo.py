@@ -24,6 +24,7 @@ from .ppo import (
     EvaluationPPO,
     ResNetGaussianPolicy,
     ResNetValue,
+    StateValue,
     evaluate_ppo,
     initialize_policy_from_bc,
     load_bc_policy_metadata,
@@ -45,6 +46,7 @@ PPO_PRESETS = {
         "value_clip": 0.0,
         "target_kl": 0.2,
         "initial_log_std": -0.5,
+        "critic_input": "state",
     },
     "legacy": {
         "total_timesteps": 1_000_000,
@@ -59,6 +61,7 @@ PPO_PRESETS = {
         "value_clip": 0.1,
         "target_kl": 0.01,
         "initial_log_std": -1.0,
+        "critic_input": "rgb",
     },
 }
 
@@ -99,6 +102,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--actor-layers", type=int, default=3)
     p.add_argument("--task-embedding-dim", type=int, default=64)
     p.add_argument("--initial-log-std", type=float, default=None)
+    p.add_argument("--critic-input", choices=("rgb", "state"), default=None)
     p.add_argument(
         "--pretrained-backbone", action=argparse.BooleanOptionalAction, default=True
     )
@@ -241,15 +245,26 @@ def main(argv: list[str] | None = None) -> None:
         initial_log_std=args.initial_log_std,
         pretrained_backbone=args.pretrained_backbone,
     ).to(device)
-    value = ResNetValue(
-        observation_space=env.observation_space,
-        action_space=env.action_space,
-        device=device,
-        image_size=args.image_size,
-        context_length=args.context_length,
-        hidden_dim=args.policy_hidden_dim,
-        pretrained_backbone=args.pretrained_backbone,
-    ).to(device)
+    if args.critic_input == "state":
+        if env.state_space is None:
+            env.close()
+            raise ValueError("state critic requires an environment state_space")
+        value = StateValue(
+            state_space=env.state_space,
+            action_space=env.action_space,
+            device=device,
+            hidden_dim=args.policy_hidden_dim,
+        ).to(device)
+    else:
+        value = ResNetValue(
+            observation_space=env.observation_space,
+            action_space=env.action_space,
+            device=device,
+            image_size=args.image_size,
+            context_length=args.context_length,
+            hidden_dim=args.policy_hidden_dim,
+            pretrained_backbone=args.pretrained_backbone,
+        ).to(device)
     if bc_checkpoint is not None:
         assert bc_task_index is not None
         initialize_policy_from_bc(policy, bc_checkpoint, bc_task_index)
@@ -265,6 +280,7 @@ def main(argv: list[str] | None = None) -> None:
         "mlp_layers": args.actor_layers,
         "num_envs": args.num_envs,
         "sim_backend": args.sim_backend,
+        "critic_input": args.critic_input,
         "run_metadata": run_metadata,
     }
     memory = RandomMemory(
@@ -318,6 +334,7 @@ def main(argv: list[str] | None = None) -> None:
         models={"policy": policy, "value": value},
         memory=memory,
         observation_space=env.observation_space,
+        state_space=env.state_space,
         action_space=env.action_space,
         device=device,
         cfg=cfg,

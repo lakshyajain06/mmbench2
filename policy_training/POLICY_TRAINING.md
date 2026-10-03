@@ -128,6 +128,9 @@ Status: implemented and tested.
   and saturated-action log-probability consistency.
 - A GPU smoke test confirmed the configured 25-policy-step horizon and
   terminal/reset observation separation on `ms-pick-cube`.
+- The default ManiSkill preset now uses a privileged-state critic with an
+  RGB-only actor. Terminal simulator state is preserved for timeout
+  bootstrapping, and portable policy checkpoints remain RGB-only.
 
 ## Deferred work
 
