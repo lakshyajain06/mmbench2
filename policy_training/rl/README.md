@@ -29,6 +29,9 @@ schedule: 1,024 environments, 16 rollout steps, 32 minibatches, eight epochs,
 the reference clipping and exploration settings. Override the scale for local
 smoke tests as needed. `--preset legacy` restores the earlier MMBench2 PPO
 defaults for controlled comparisons.
+The ManiSkill preset uses the reference-style NatureCNN for scratch policies.
+Supplying `--bc-checkpoint` selects ResNet-18 automatically so the pretrained
+weights and policy head remain architecture-compatible.
 
 The CLI's `--total-timesteps`, checkpoint intervals, and evaluation intervals
 are all measured in total transitions across environments. The default

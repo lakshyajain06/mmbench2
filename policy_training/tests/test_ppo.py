@@ -66,6 +66,7 @@ class PPOPipelineTest(unittest.TestCase):
         self.assertEqual(reference.n_epochs, 8)
         self.assertEqual(reference.learning_rate, 3e-4)
         self.assertEqual(reference.value_clip, 0.0)
+        self.assertEqual(reference.encoder, "nature")
 
         legacy = parser().parse_args(
             ["--task", "ms-pick-cube", "--preset", "legacy"]
@@ -76,6 +77,7 @@ class PPOPipelineTest(unittest.TestCase):
         self.assertEqual(legacy.n_steps, 32)
         self.assertEqual(legacy.batch_size, 256)
         self.assertEqual(legacy.learning_rate, 1e-5)
+        self.assertEqual(legacy.encoder, "resnet18")
 
         override = parser().parse_args(
             [
@@ -351,6 +353,24 @@ class PPOPipelineTest(unittest.TestCase):
             )
         self.assertTrue(torch.any(actions.abs() > 1))
         torch.testing.assert_close(rollout["log_prob"], update["log_prob"])
+
+    def test_nature_encoder_policy(self):
+        policy = ResNetGaussianPolicy(
+            observation_space=gym.spaces.Box(
+                0, 255, (3, 64, 64), dtype=np.uint8
+            ),
+            action_space=gym.spaces.Box(-1, 1, (4,), dtype=np.float32),
+            device="cpu",
+            image_size=64,
+            hidden_dim=16,
+            task_embedding_dim=4,
+            mlp_layers=1,
+            pretrained_backbone=False,
+            encoder="nature",
+        ).eval()
+        action = policy.predict(np.zeros((3, 64, 64), dtype=np.uint8))
+        self.assertEqual(action.shape, (4,))
+        self.assertEqual(policy.feature_dim, 256)
 
 
 if __name__ == "__main__":

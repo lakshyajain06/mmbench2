@@ -20,7 +20,7 @@ from .env import make_rgb_env
 
 
 class _VisualModel(Model):
-    """Common image conversion and ImageNet-normalized ResNet feature trunk."""
+    """Common image conversion and configurable visual feature trunk."""
 
     def __init__(
         self,
@@ -31,6 +31,7 @@ class _VisualModel(Model):
         image_size: int,
         context_length: int,
         pretrained_backbone: bool,
+        encoder: str,
     ) -> None:
         Model.__init__(
             self,
@@ -40,14 +41,43 @@ class _VisualModel(Model):
         )
         self.image_size = int(image_size)
         self.context_length = int(context_length)
-        weights = ResNet18_Weights.DEFAULT if pretrained_backbone else None
-        self.backbone = resnet18(weights=weights)
-        self.backbone.fc = torch.nn.Identity()
+        self.encoder = encoder
+        if encoder == "resnet18":
+            weights = ResNet18_Weights.DEFAULT if pretrained_backbone else None
+            self.backbone = resnet18(weights=weights)
+            self.backbone.fc = torch.nn.Identity()
+            self.feature_dim = 512
+            image_mean = [0.485, 0.456, 0.406]
+            image_std = [0.229, 0.224, 0.225]
+        elif encoder == "nature":
+            convolution = torch.nn.Sequential(
+                torch.nn.Conv2d(3, 32, kernel_size=8, stride=4),
+                torch.nn.ReLU(),
+                torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
+                torch.nn.ReLU(),
+                torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
+                torch.nn.ReLU(),
+                torch.nn.Flatten(),
+            )
+            with torch.no_grad():
+                flattened = convolution(
+                    torch.zeros(1, 3, self.image_size, self.image_size)
+                ).shape[-1]
+            self.backbone = torch.nn.Sequential(
+                convolution,
+                torch.nn.Linear(flattened, 256),
+                torch.nn.ReLU(),
+            )
+            self.feature_dim = 256
+            image_mean = [0.0, 0.0, 0.0]
+            image_std = [1.0, 1.0, 1.0]
+        else:
+            raise ValueError(f"Unknown visual encoder: {encoder}")
         self.register_buffer(
-            "image_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+            "image_mean", torch.tensor(image_mean).view(1, 3, 1, 1)
         )
         self.register_buffer(
-            "image_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+            "image_std", torch.tensor(image_std).view(1, 3, 1, 1)
         )
 
     def _images(self, observations: torch.Tensor) -> torch.Tensor:
@@ -70,7 +100,7 @@ class _VisualModel(Model):
         features = self.backbone(
             images.reshape(batch * context, channels, height, width)
         )
-        return features.reshape(batch, context * 512)
+        return features.reshape(batch, context * self.feature_dim)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -99,6 +129,7 @@ class ResNetGaussianPolicy(GaussianMixin, _VisualModel):
         mlp_layers: int = 3,
         initial_log_std: float = -1.0,
         pretrained_backbone: bool = True,
+        encoder: str = "resnet18",
     ) -> None:
         _VisualModel.__init__(
             self,
@@ -108,6 +139,7 @@ class ResNetGaussianPolicy(GaussianMixin, _VisualModel):
             image_size=image_size,
             context_length=context_length,
             pretrained_backbone=pretrained_backbone,
+            encoder=encoder,
         )
         GaussianMixin.__init__(
             self,
@@ -125,7 +157,7 @@ class ResNetGaussianPolicy(GaussianMixin, _VisualModel):
         self.mlp_layers = int(mlp_layers)
         self.task_embedding = torch.nn.Parameter(torch.zeros(task_embedding_dim))
         layers: list[torch.nn.Module] = []
-        input_dim = 512 * context_length + task_embedding_dim
+        input_dim = self.feature_dim * context_length + task_embedding_dim
         for _ in range(mlp_layers):
             layers.extend(
                 (
@@ -173,6 +205,7 @@ class ResNetValue(DeterministicMixin, _VisualModel):
         context_length: int = 1,
         hidden_dim: int = 512,
         pretrained_backbone: bool = True,
+        encoder: str = "resnet18",
     ) -> None:
         _VisualModel.__init__(
             self,
@@ -182,10 +215,11 @@ class ResNetValue(DeterministicMixin, _VisualModel):
             image_size=image_size,
             context_length=context_length,
             pretrained_backbone=pretrained_backbone,
+            encoder=encoder,
         )
         DeterministicMixin.__init__(self, clip_actions=False)
         self.value = torch.nn.Sequential(
-            torch.nn.Linear(512 * context_length, hidden_dim),
+            torch.nn.Linear(self.feature_dim * context_length, hidden_dim),
             torch.nn.GELU(),
             torch.nn.Linear(hidden_dim, hidden_dim),
             torch.nn.GELU(),
@@ -241,6 +275,8 @@ def initialize_policy_from_bc(
     policy: ResNetGaussianPolicy, checkpoint: dict, task_index: int
 ) -> None:
     """Restore the visual trunk, task embedding, and first BC chunk action."""
+    if policy.encoder != "resnet18":
+        raise ValueError("BC initialization requires the ResNet-18 encoder")
     state = checkpoint["model"]
     backbone_state = {
         key.removeprefix("backbone."): value
@@ -297,6 +333,7 @@ def load_portable_policy(
     action_dim = int(metadata["action_dim"])
     image_size = int(metadata["image_size"])
     context_length = int(metadata.get("context_length", 1))
+    encoder = metadata.get("encoder", "resnet18")
     observation_shape = (
         (3, image_size, image_size)
         if context_length == 1
@@ -312,6 +349,7 @@ def load_portable_policy(
         task_embedding_dim=int(metadata["task_embedding_dim"]),
         mlp_layers=int(metadata["mlp_layers"]),
         pretrained_backbone=False,
+        encoder=encoder,
     )
     policy.load_state_dict(checkpoint["policy"])
     policy.to(device).eval()

@@ -48,6 +48,7 @@ PPO_PRESETS = {
         "target_kl": 0.2,
         "initial_log_std": -0.5,
         "critic_input": "state",
+        "encoder": "nature",
     },
     "legacy": {
         "total_timesteps": 1_000_000,
@@ -64,6 +65,7 @@ PPO_PRESETS = {
         "target_kl": 0.01,
         "initial_log_std": -1.0,
         "critic_input": "rgb",
+        "encoder": "resnet18",
     },
 }
 
@@ -109,6 +111,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--task-embedding-dim", type=int, default=64)
     p.add_argument("--initial-log-std", type=float, default=None)
     p.add_argument("--critic-input", choices=("rgb", "state"), default=None)
+    p.add_argument("--encoder", choices=("nature", "resnet18"), default=None)
     p.add_argument(
         "--pretrained-backbone", action=argparse.BooleanOptionalAction, default=True
     )
@@ -271,6 +274,7 @@ def main(argv: list[str] | None = None) -> None:
         args.task_embedding_dim = int(bc_config["task_embedding_dim"])
         args.actor_layers = int(bc_config["mlp_layers"])
         args.context_length = int(bc_config.get("context_length", 1))
+        args.encoder = "resnet18"
     (output / "config.json").write_text(json.dumps(vars(args), indent=2) + "\n")
     run_metadata = _run_metadata()
     (output / "run_metadata.json").write_text(
@@ -303,6 +307,7 @@ def main(argv: list[str] | None = None) -> None:
         mlp_layers=args.actor_layers,
         initial_log_std=args.initial_log_std,
         pretrained_backbone=args.pretrained_backbone,
+        encoder=args.encoder,
     ).to(device)
     if args.critic_input == "state":
         if env.state_space is None:
@@ -323,6 +328,7 @@ def main(argv: list[str] | None = None) -> None:
             context_length=args.context_length,
             hidden_dim=args.policy_hidden_dim,
             pretrained_backbone=args.pretrained_backbone,
+            encoder=args.encoder,
         ).to(device)
     if bc_checkpoint is not None:
         assert bc_task_index is not None
@@ -340,6 +346,7 @@ def main(argv: list[str] | None = None) -> None:
         "num_envs": args.num_envs,
         "sim_backend": args.sim_backend,
         "critic_input": args.critic_input,
+        "encoder": args.encoder,
         "run_metadata": run_metadata,
     }
     memory = RandomMemory(
