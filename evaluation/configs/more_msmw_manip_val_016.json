@@ -1,0 +1,58 @@
+{
+  "dataset": {
+    "adapter": "robotics",
+    "root": "~/datasets/mmbench2_robotics",
+    "partitions": ["val"],
+    "frames": "strips",
+    "shards_root": "../runs/preprocessed",
+    "strip_size": 4008,
+    "strip_cache_size": 2,
+    "shard_size": 4096
+  },
+  "tasks": {
+    "metadata": "../../tasks.json",
+    "first_pass": [
+      "ms-pick-banana", "ms-pick-baseball", "ms-pick-cube-eepose",
+      "ms-pick-cube-xarm6", "ms-pick-fork", "ms-pick-hammer",
+      "ms-pick-knife", "ms-pick-mug", "ms-pick-orange",
+      "ms-pick-screwdriver", "ms-pick-sponge", "ms-pick-spoon",
+      "ms-pick-tennis-ball", "ms-reach-eepose", "ms-reach-xarm6",
+      "mw-coffee-pull", "mw-coffee-push", "mw-hammer",
+      "mw-handle-press", "mw-handle-pull", "mw-handle-pull-side",
+      "mw-lever-pull", "mw-peg-unplug-side", "mw-plate-slide",
+      "mw-plate-slide-back-side", "mw-push-back", "mw-push-wall",
+      "mw-soccer", "mw-stick-push", "mw-window-close"
+    ],
+    "backups": []
+  },
+  "model": {
+    "adapter": "combined",
+    "tokenizer_ckpt": "../../src/checkpoints/combined/tokenizer.pt",
+    "dynamics_ckpt": "../../src/checkpoints/combined/dynamics.pt",
+    "packing_factor": 2,
+    "device": "cuda",
+    "amp": true,
+    "schedule": "shortcut",
+    "eval_d": 0.125,
+    "use_kv_cache": true
+  },
+  "sampling": {
+    "horizons": [1, 4, 8, 16],
+    "episodes_per_task": 20,
+    "windows_per_episode": 1,
+    "paired_horizons": true,
+    "phase_fraction": 0.16,
+    "seeds": [11, 23],
+    "seed": 2026
+  },
+  "review": {
+    "min_useful_rate": 0.6,
+    "min_hallucination_rate": 0.05,
+    "max_hallucination_rate": 0.3,
+    "min_affected_episodes": 2,
+    "min_selected_tasks": 5,
+    "max_selected_tasks": 8
+  },
+  "save_visuals": true,
+  "output": "../runs/more_msmw_manip_val_016"
+}

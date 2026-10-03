@@ -1,0 +1,52 @@
+{
+  "dataset": {
+    "adapter": "robotics",
+    "root": "~/datasets/mmbench2_robotics",
+    "partitions": ["val"],
+    "frames": "strips",
+    "shards_root": "../runs/preprocessed",
+    "strip_size": 4008,
+    "strip_cache_size": 2,
+    "shard_size": 4096
+  },
+  "tasks": {
+    "metadata": "../../tasks.json",
+    "first_pass": [
+      "ms-pull-cube", "ms-poke-cube", "ms-lift-peg", "ms-place-sphere",
+      "ms-pick-apple", "ms-pick-can", "ms-pick-cube-so", "ms-pull-cube-tool",
+      "mw-door-close", "mw-drawer-close", "mw-window-open", "mw-faucet-open",
+      "mw-peg-insert-side", "mw-sweep-into", "mw-button-press-wall", "mw-assembly"
+    ],
+    "backups": []
+  },
+  "model": {
+    "adapter": "combined",
+    "tokenizer_ckpt": "../../src/checkpoints/combined/tokenizer.pt",
+    "dynamics_ckpt": "../../src/checkpoints/combined/dynamics.pt",
+    "packing_factor": 2,
+    "device": "cuda",
+    "amp": true,
+    "schedule": "shortcut",
+    "eval_d": 0.125,
+    "use_kv_cache": true
+  },
+  "sampling": {
+    "horizons": [1, 4, 8, 16],
+    "episodes_per_task": 20,
+    "windows_per_episode": 1,
+    "paired_horizons": true,
+    "phase_fraction": 0.16,
+    "seeds": [11, 23],
+    "seed": 2026
+  },
+  "review": {
+    "min_useful_rate": 0.6,
+    "min_hallucination_rate": 0.05,
+    "max_hallucination_rate": 0.3,
+    "min_affected_episodes": 2,
+    "min_selected_tasks": 5,
+    "max_selected_tasks": 8
+  },
+  "save_visuals": true,
+  "output": "../runs/expanded_msmw_val_016"
+}
