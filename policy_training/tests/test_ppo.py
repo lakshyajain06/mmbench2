@@ -15,6 +15,7 @@ from policy_training.rl.ppo import (
     load_portable_policy,
     save_portable_checkpoint,
 )
+from policy_training.rl.train_ppo import _apply_preset, _validate, parser
 
 
 class DummyRGBEnv(gym.Env):
@@ -46,6 +47,43 @@ class DummyRGBEnv(gym.Env):
 
 
 class PPOPipelineTest(unittest.TestCase):
+    def test_maniskill_and_legacy_presets(self):
+        reference = parser().parse_args(["--task", "ms-pick-cube"])
+        _apply_preset(reference)
+        _validate(reference)
+        self.assertEqual(reference.num_envs, 1024)
+        self.assertEqual(reference.n_steps, 16)
+        self.assertEqual(reference.batch_size, 512)
+        self.assertEqual(reference.n_epochs, 8)
+        self.assertEqual(reference.learning_rate, 3e-4)
+        self.assertEqual(reference.value_clip, 0.0)
+
+        legacy = parser().parse_args(
+            ["--task", "ms-pick-cube", "--preset", "legacy"]
+        )
+        _apply_preset(legacy)
+        _validate(legacy)
+        self.assertEqual(legacy.num_envs, 64)
+        self.assertEqual(legacy.n_steps, 32)
+        self.assertEqual(legacy.batch_size, 256)
+        self.assertEqual(legacy.learning_rate, 1e-5)
+
+        override = parser().parse_args(
+            [
+                "--task",
+                "ms-pick-cube",
+                "--num-envs",
+                "8",
+                "--n-steps",
+                "4",
+                "--num-minibatches",
+                "4",
+            ]
+        )
+        _apply_preset(override)
+        _validate(override)
+        self.assertEqual(override.batch_size, 8)
+
     def test_rgb_wrapper(self):
         env = RGBObservation(DummyRGBEnv())
         observation, _ = env.reset()

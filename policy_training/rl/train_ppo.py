@@ -26,16 +26,49 @@ from .ppo import (
 )
 
 
+PPO_PRESETS = {
+    "maniskill": {
+        "total_timesteps": 50_000_000,
+        "num_envs": 1024,
+        "n_steps": 16,
+        "num_minibatches": 32,
+        "n_epochs": 8,
+        "learning_rate": 3e-4,
+        "gamma": 0.8,
+        "gae_lambda": 0.9,
+        "clip_range": 0.2,
+        "value_clip": 0.0,
+        "target_kl": 0.2,
+        "initial_log_std": -0.5,
+    },
+    "legacy": {
+        "total_timesteps": 1_000_000,
+        "num_envs": 64,
+        "n_steps": 32,
+        "batch_size": 256,
+        "n_epochs": 2,
+        "learning_rate": 1e-5,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "clip_range": 0.1,
+        "value_clip": 0.1,
+        "target_kl": 0.01,
+        "initial_log_std": -1.0,
+    },
+}
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--task", required=True)
+    p.add_argument("--preset", choices=sorted(PPO_PRESETS), default="maniskill")
     p.add_argument(
         "--total-timesteps",
         type=int,
-        default=1_000_000,
+        default=None,
         help="Total transitions across all vector environments",
     )
-    p.add_argument("--num-envs", type=int, default=64)
+    p.add_argument("--num-envs", type=int, default=None)
     p.add_argument("--sim-backend", default="physx_cuda")
     p.add_argument("--image-size", type=int, default=64)
     p.add_argument(
@@ -44,22 +77,23 @@ def parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of current/past RGB observations supplied to actor and critic",
     )
-    p.add_argument("--n-steps", type=int, default=32)
-    p.add_argument("--batch-size", type=int, default=256)
-    p.add_argument("--n-epochs", type=int, default=2)
-    p.add_argument("--learning-rate", type=float, default=1e-5)
-    p.add_argument("--gamma", type=float, default=0.99)
-    p.add_argument("--gae-lambda", type=float, default=0.95)
-    p.add_argument("--clip-range", type=float, default=0.1)
-    p.add_argument("--value-clip", type=float, default=0.1)
-    p.add_argument("--target-kl", type=float, default=0.01)
+    p.add_argument("--n-steps", type=int, default=None)
+    p.add_argument("--batch-size", type=int)
+    p.add_argument("--num-minibatches", type=int)
+    p.add_argument("--n-epochs", type=int, default=None)
+    p.add_argument("--learning-rate", type=float, default=None)
+    p.add_argument("--gamma", type=float, default=None)
+    p.add_argument("--gae-lambda", type=float, default=None)
+    p.add_argument("--clip-range", type=float, default=None)
+    p.add_argument("--value-clip", type=float, default=None)
+    p.add_argument("--target-kl", type=float, default=None)
     p.add_argument("--ent-coef", type=float, default=0.0)
     p.add_argument("--vf-coef", type=float, default=0.5)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--policy-hidden-dim", type=int, default=512)
     p.add_argument("--actor-layers", type=int, default=3)
     p.add_argument("--task-embedding-dim", type=int, default=64)
-    p.add_argument("--initial-log-std", type=float, default=-1.0)
+    p.add_argument("--initial-log-std", type=float, default=None)
     p.add_argument(
         "--pretrained-backbone", action=argparse.BooleanOptionalAction, default=True
     )
@@ -91,6 +125,19 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+def _apply_preset(args: argparse.Namespace) -> None:
+    for name, value in PPO_PRESETS[args.preset].items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
+    rollout_size = args.n_steps * args.num_envs
+    if args.batch_size is None:
+        if args.num_minibatches is None:
+            raise ValueError("preset must define batch-size or num-minibatches")
+        if rollout_size % args.num_minibatches:
+            raise ValueError("n-steps * num-envs must be divisible by num-minibatches")
+        args.batch_size = rollout_size // args.num_minibatches
+
+
 def _validate(args: argparse.Namespace) -> None:
     for name in (
         "total_timesteps", "num_envs", "image_size", "context_length", "n_steps", "batch_size"
@@ -108,6 +155,7 @@ def _validate(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
+    _apply_preset(args)
     _validate(args)
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)

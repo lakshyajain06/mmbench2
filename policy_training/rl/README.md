@@ -23,11 +23,17 @@ python -m policy_training.rl.train_ppo \
   --wandb-run-name ms-reach-skrl-ppo
 ```
 
-The defaults collect 32 steps from 64 native environments per rollout. The
-CLI's `--total-timesteps`, checkpoint intervals, and evaluation intervals are
-all measured in total transitions across environments. The default 64-pixel
-input keeps visual rollout memory tractable; ResNet accepts it even when the BC
-checkpoint was trained from 224-pixel strips.
+The default `--preset maniskill` uses the official RGB PickCube benchmark
+schedule: 1,024 environments, 16 rollout steps, 32 minibatches, eight epochs,
+50 million transitions, `3e-4` learning rate, `0.8/0.9` discount and GAE, and
+the reference clipping and exploration settings. Override the scale for local
+smoke tests as needed. `--preset legacy` restores the earlier MMBench2 PPO
+defaults for controlled comparisons.
+
+The CLI's `--total-timesteps`, checkpoint intervals, and evaluation intervals
+are all measured in total transitions across environments. The default
+64-pixel input keeps visual rollout memory tractable; ResNet accepts it even
+when the BC checkpoint was trained from 224-pixel strips.
 
 The actor restores the BC ResNet, selected task embedding, full MLP, and the
 first action in the BC chunk. PPO adds a Gaussian standard deviation and an
