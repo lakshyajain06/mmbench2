@@ -167,8 +167,13 @@ class MMBenchManiSkillEnv:
         from skrl.utils.spaces.torch import unflatten_tensorized_space
 
         actions = unflatten_tensorized_space(self.action_space, actions)
+        low = torch.as_tensor(self.action_space.low, device=actions.device)
+        high = torch.as_tensor(self.action_space.high, device=actions.device)
+        environment_actions = actions.clamp(low, high)
         with torch.no_grad():
-            observation, reward, terminated, truncated, info = self._env.step(actions)
+            observation, reward, terminated, truncated, info = self._env.step(
+                environment_actions
+            )
             flattened = self._flatten(self.observation_space, observation)
             done = (terminated | truncated).flatten()
             if done.any():

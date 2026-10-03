@@ -131,6 +131,7 @@ class PPOPipelineTest(unittest.TestCase):
 
             def __init__(self):
                 self.observation = torch.tensor([[1.0], [2.0]])
+                self.last_action = None
 
             def reset(self, *, seed=None, options=None):
                 if options is not None:
@@ -138,6 +139,7 @@ class PPOPipelineTest(unittest.TestCase):
                 return self.observation.clone(), {"reset": True}
 
             def step(self, action):
+                self.last_action = action.clone()
                 self.observation = torch.tensor([[10.0], [20.0]])
                 return (
                     self.observation.clone(),
@@ -150,9 +152,13 @@ class PPOPipelineTest(unittest.TestCase):
             def close(self):
                 pass
 
-        env = MMBenchManiSkillEnv(TensorEnv())
+        tensor_env = TensorEnv()
+        env = MMBenchManiSkillEnv(tensor_env)
         env.reset()
-        observation, _, _, truncated, info = env.step(torch.zeros((2, 1)))
+        observation, _, _, truncated, info = env.step(
+            torch.tensor([[2.0], [-3.0]])
+        )
+        torch.testing.assert_close(tensor_env.last_action, torch.tensor([[1.0], [-1.0]]))
         torch.testing.assert_close(observation, torch.tensor([[100.0], [20.0]]))
         torch.testing.assert_close(
             info["final_observation"], torch.tensor([[10.0], [20.0]])
@@ -172,6 +178,29 @@ class PPOPipelineTest(unittest.TestCase):
             },
         )
         torch.testing.assert_close(selected, torch.tensor([[10.0], [200.0]]))
+
+    def test_policy_log_probability_uses_unclipped_sample(self):
+        observation_space = gym.spaces.Box(0, 255, (3, 64, 64), dtype=np.uint8)
+        action_space = gym.spaces.Box(-1, 1, (4,), dtype=np.float32)
+        policy = ResNetGaussianPolicy(
+            observation_space=observation_space,
+            action_space=action_space,
+            device="cpu",
+            image_size=64,
+            hidden_dim=16,
+            task_embedding_dim=4,
+            mlp_layers=1,
+            initial_log_std=1.0,
+            pretrained_backbone=False,
+        ).eval()
+        observations = torch.zeros((16, 3, 64, 64), dtype=torch.uint8)
+        with torch.no_grad():
+            actions, rollout = policy.act({"observations": observations})
+            _, update = policy.act(
+                {"observations": observations, "taken_actions": actions}
+            )
+        self.assertTrue(torch.any(actions.abs() > 1))
+        torch.testing.assert_close(rollout["log_prob"], update["log_prob"])
 
 
 if __name__ == "__main__":

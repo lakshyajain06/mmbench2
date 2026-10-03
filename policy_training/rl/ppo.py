@@ -111,7 +111,10 @@ class ResNetGaussianPolicy(GaussianMixin, _VisualModel):
         )
         GaussianMixin.__init__(
             self,
-            clip_actions=True,
+            # PPO stores and reevaluates the sampled Gaussian action. Clipping
+            # happens only at the environment boundary so its log probability
+            # remains the probability of the action that was actually sampled.
+            clip_actions=False,
             clip_mean_actions=True,
             min_log_std=-5.0,
             max_log_std=1.0,
