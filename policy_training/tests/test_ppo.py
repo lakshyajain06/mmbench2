@@ -58,6 +58,7 @@ class DummyRGBEnv(gym.Env):
 class PPOPipelineTest(unittest.TestCase):
     def test_maniskill_and_legacy_presets(self):
         reference = parser().parse_args(["--task", "ms-pick-cube"])
+        self.assertTrue(reference.wandb)
         _apply_preset(reference)
         _validate(reference)
         self.assertEqual(reference.num_envs, 1024)
@@ -94,6 +95,11 @@ class PPOPipelineTest(unittest.TestCase):
         _apply_preset(override)
         _validate(override)
         self.assertEqual(override.batch_size, 8)
+
+        no_wandb = parser().parse_args(
+            ["--task", "ms-pick-cube", "--no-wandb"]
+        )
+        self.assertFalse(no_wandb.wandb)
 
     def test_rgb_wrapper(self):
         env = RGBObservation(DummyRGBEnv())

@@ -19,9 +19,12 @@ python -m policy_training.rl.train_ppo \
   --bc-checkpoint policy_training/runs/ms-reach-resnet-mlp/best_success.pt \
   --num-envs 64 \
   --output policy_training/runs/ms-reach-skrl-ppo \
-  --wandb \
   --wandb-run-name ms-reach-skrl-ppo
 ```
+
+Weights & Biases logging is enabled by default under the `mmbench2-policy`
+project. Use `--no-wandb` for local smoke tests, or `--wandb-mode offline` when
+the machine cannot reach W&B during training.
 
 The default `--preset maniskill` uses the official RGB PickCube benchmark
 schedule: 1,024 environments, 16 rollout steps, 32 minibatches, eight epochs,

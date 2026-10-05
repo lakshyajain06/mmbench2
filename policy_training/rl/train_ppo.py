@@ -133,7 +133,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--eval-output-dir")
     p.add_argument("--eval-video-episodes", type=int, default=3)
     p.add_argument("--eval-video-fps", type=int, default=20)
-    p.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--wandb-project", default="mmbench2-policy")
     p.add_argument("--wandb-entity")
     p.add_argument("--wandb-run-name")
